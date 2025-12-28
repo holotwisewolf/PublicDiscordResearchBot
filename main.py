@@ -79,8 +79,8 @@ ai_models = config.get("ai_models", {})
 RESEARCH_MODEL = ai_models.get("research", "claude-sonnet-4-20250514")
 BUILD_MODEL = ai_models.get("build", "claude-sonnet-4-20250514")
 GENERAL_MODEL = ai_models.get("general", "gpt-4")
-CODE_MODEL = ai_models.get("code", "gemini-1.5-pro")
-ROUTER_MODEL = ai_models.get("router", "gemini-1.5-flash")
+CODE_MODEL = ai_models.get("code", "gemini-3-flash-preview")
+ROUTER_MODEL = ai_models.get("router", "gemini-3-flash-preview")
 
 # ============================================================
 # INITIALIZE CLIENTS
@@ -421,6 +421,38 @@ async def on_ready():
     print(f'  Findings: {FINDINGS_CHANNEL_ID}')
     print(f'  Task: {TASK_CHANNEL_ID}')
     print(f'  Completed: {COMPLETED_CHANNEL_ID}')
+
+
+@bot.event
+async def on_command_error(ctx, error):
+    """Global error handler - sends errors to Discord instead of just terminal"""
+    
+    # Get the original error if it's wrapped
+    original_error = getattr(error, 'original', error)
+    error_type = type(original_error).__name__
+    error_msg = str(original_error)
+    
+    # Print to terminal for logging
+    print(f"❌ Error in {ctx.command}: {error_type}: {error_msg}")
+    
+    # Handle specific error types with user-friendly messages
+    if isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send(f"❌ **Missing argument:** `{error.param.name}`\n"
+                      f"Usage: `!{ctx.command.name} {ctx.command.signature}`")
+    
+    elif isinstance(error, commands.CommandNotFound):
+        await ctx.send(f"❌ **Unknown command.** Use `!help_bot` to see available commands.")
+    
+    elif isinstance(error, commands.CommandOnCooldown):
+        await ctx.send(f"⏳ **Cooldown:** Try again in {error.retry_after:.1f}s")
+    
+    else:
+        # Generic error - show type and message
+        # Truncate long error messages
+        if len(error_msg) > 500:
+            error_msg = error_msg[:500] + "..."
+        
+        await ctx.send(f"❌ **Error:** `{error_type}`\n```{error_msg}```")
 
 
 @bot.event

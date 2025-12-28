@@ -15,7 +15,7 @@
         "research": "claude-sonnet-4-20250514",
         "build": "claude-sonnet-4-20250514",
         "general": "gpt-4",
-        "code": "gemini-1.5-pro",
-        "router": "gemini-1.5-flash"
+        "code": "gemini-3-flash-preview",
+        "router": "gemini-3-flash-preview"
     }
 }
