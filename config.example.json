@@ -1,0 +1,21 @@
+{
+    "discord": {
+        "channels": {
+            "general": null,
+            "research": null,
+            "build": null,
+            "findings": null,
+            "archive": null,
+            "testcase": null,
+            "completed": null,
+            "task": null
+        }
+    },
+    "ai_models": {
+        "research": "claude-sonnet-4-20250514",
+        "build": "claude-sonnet-4-20250514",
+        "general": "gpt-4",
+        "code": "gemini-1.5-pro",
+        "router": "gemini-1.5-flash"
+    }
+}

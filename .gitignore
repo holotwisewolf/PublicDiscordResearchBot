@@ -1,0 +1,19 @@
+# Environment
+.env
+config.json
+venv/
+__pycache__/
+*.pyc
+
+# Build output
+dist/
+build/
+*.spec
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
