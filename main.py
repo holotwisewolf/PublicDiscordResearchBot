@@ -461,6 +461,51 @@ async def ask_general(ctx, *, query: str):
             await ctx.send(chunk)
 
 
+@bot.command(name='auto')
+async def auto_route(ctx, *, query: str):
+    """Auto-route query to the best AI using Gemini (FREE routing). Usage: !auto [question]"""
+    
+    if not gemini_client:
+        await ctx.send("❌ Gemini API key not configured. `!auto` requires Gemini for routing.")
+        return
+    
+    async with ctx.typing():
+        await ctx.send("🔀 Routing query with Gemini (free)...")
+        
+        # Use CenterAI to determine the best agent
+        agent_type, channel_id = await CenterAI.route_query(query)
+        
+        # Load project context
+        project_context = await ProjectContext.get_full_context(bot)
+        
+        if agent_type == "research":
+            await ctx.send("🧠 Routed to **Claude** (Research)...")
+            response = await ResearchAgent.process(query, project_context=project_context, mode='core')
+            target_channel = bot.get_channel(RESEARCH_CHANNEL_ID)
+            
+            chunks = [response[i:i+1900] for i in range(0, len(response), 1900)]
+            for i, chunk in enumerate(chunks):
+                if i == 0:
+                    await target_channel.send(f"**🔀 Auto-Routed (Research):** *{query[:100]}...*\n\n{chunk}")
+                else:
+                    await target_channel.send(chunk)
+            
+            await ctx.send(f"✅ Response posted in <#{RESEARCH_CHANNEL_ID}>")
+        else:
+            await ctx.send("🏗️ Routed to **Claude** (Build)...")
+            response = await BuildAgent.process(query, project_context=project_context)
+            target_channel = bot.get_channel(BUILD_CHANNEL_ID)
+            
+            chunks = [response[i:i+1900] for i in range(0, len(response), 1900)]
+            for i, chunk in enumerate(chunks):
+                if i == 0:
+                    await target_channel.send(f"**🔀 Auto-Routed (Build):** *{query[:100]}...*\n\n{chunk}")
+                else:
+                    await target_channel.send(chunk)
+            
+            await ctx.send(f"✅ Response posted in <#{BUILD_CHANNEL_ID}>")
+
+
 @bot.command(name='deep')
 async def ask_deep(ctx, *, query: str):
     """Ask Claude for deep reasoning/analysis. Usage: !deep [question]"""
@@ -780,6 +825,7 @@ async def help_bot(ctx):
 • `!build [request]` - Claude for complex implementation ($$$)
 
 **Multi-AI:**
+• `!auto [question]` - Let Gemini route to the right AI (FREE routing)
 • `!crosscheck [question]` - Claude + GPT-4 comparison
 • `!consensus [question]` - All 3 AIs (logged to #findings)
 • `!gemini [question]` - Direct Gemini access (FREE)
