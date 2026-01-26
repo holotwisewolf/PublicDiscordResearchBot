@@ -423,6 +423,70 @@ async def on_ready():
     print(f'  Completed: {COMPLETED_CHANNEL_ID}')
 
 
+
+def split_message(text: str, limit: int = 1900) -> list[str]:
+    """
+    Splits a message into chunks that fit within Discord's character limit (default 2000).
+    Respects Markdown code blocks to prevent breakage.
+    """
+    if len(text) <= limit:
+        return [text]
+    
+    chunks = []
+    current_chunk = ""
+    code_block_open = False
+    language = ""
+    
+    lines = text.split('\n')
+    
+    for line in lines:
+        # Check for code block toggles
+        if line.strip().startswith('```'):
+            if code_block_open:
+                code_block_open = False
+                language = ""
+            else:
+                code_block_open = True
+                # Capture language if present (e.g. ```python)
+                language = line.strip()[3:]
+        
+        # If adding this line exceeds limit
+        if len(current_chunk) + len(line) + 1 > limit:
+            # 1. Close current chunk if it has content
+            if current_chunk:
+                if code_block_open:
+                    current_chunk += "```"
+                chunks.append(current_chunk)
+                current_chunk = ""
+                if code_block_open:
+                    current_chunk += f"```{language}\n"
+            
+            # 2. Handle line that is longer than limit by itself
+            while len(line) > limit - len(current_chunk):
+                space_left = limit - len(current_chunk)
+                
+                part = line[:space_left]
+                line = line[space_left:]
+                
+                current_chunk += part
+                if code_block_open:
+                    current_chunk += "```"
+                chunks.append(current_chunk)
+                
+                current_chunk = ""
+                if code_block_open:
+                    current_chunk += f"```{language}\n"
+            
+            current_chunk += line + "\n"
+        else:
+            current_chunk += line + "\n"
+            
+    if current_chunk:
+        chunks.append(current_chunk)
+        
+    return chunks
+
+
 @bot.event
 async def on_command_error(ctx, error):
     """Global error handler - sends errors to Discord instead of just terminal"""
@@ -488,7 +552,7 @@ async def ask_general(ctx, *, query: str):
         
         response = await GeneralAgent.process(query, project_context=project_context)
         
-        chunks = [response[i:i+1900] for i in range(0, len(response), 1900)]
+        chunks = split_message(response)
         for chunk in chunks:
             await ctx.send(chunk)
 
@@ -515,7 +579,7 @@ async def auto_route(ctx, *, query: str):
             response = await ResearchAgent.process(query, project_context=project_context, mode='core')
             target_channel = bot.get_channel(RESEARCH_CHANNEL_ID)
             
-            chunks = [response[i:i+1900] for i in range(0, len(response), 1900)]
+            chunks = split_message(response)
             for i, chunk in enumerate(chunks):
                 if i == 0:
                     await target_channel.send(f"**🔀 Auto-Routed (Research):** *{query[:100]}...*\n\n{chunk}")
@@ -528,7 +592,7 @@ async def auto_route(ctx, *, query: str):
             response = await BuildAgent.process(query, project_context=project_context)
             target_channel = bot.get_channel(BUILD_CHANNEL_ID)
             
-            chunks = [response[i:i+1900] for i in range(0, len(response), 1900)]
+            chunks = split_message(response)
             for i, chunk in enumerate(chunks):
                 if i == 0:
                     await target_channel.send(f"**🔀 Auto-Routed (Build):** *{query[:100]}...*\n\n{chunk}")
@@ -549,7 +613,7 @@ async def ask_deep(ctx, *, query: str):
         response = await ResearchAgent.process(query, project_context=project_context, mode='core')
         research_channel = bot.get_channel(RESEARCH_CHANNEL_ID)
         
-        chunks = [response[i:i+1900] for i in range(0, len(response), 1900)]
+        chunks = split_message(response)
         for i, chunk in enumerate(chunks):
             if i == 0:
                 await research_channel.send(f"**Deep Research (Claude)** responding to: *{query[:100]}...*\n\n{chunk}")
@@ -576,7 +640,7 @@ async def ask_hardmode(ctx, *, query: str):
         response = await ResearchAgent.process(query, project_context=project_context, mode='hardmode')
         research_channel = bot.get_channel(RESEARCH_CHANNEL_ID)
         
-        chunks = [response[i:i+1900] for i in range(0, len(response), 1900)]
+        chunks = split_message(response)
         for i, chunk in enumerate(chunks):
             if i == 0:
                 await research_channel.send(f"**🔥 HARD MODE CRITIQUE** of: *{query[:100]}...*\n\n{chunk}")
@@ -596,7 +660,7 @@ async def ask_code(ctx, *, query: str):
         
         response = await SimpleCodeAgent.process(query, project_context=project_context)
         
-        chunks = [response[i:i+1900] for i in range(0, len(response), 1900)]
+        chunks = split_message(response)
         for chunk in chunks:
             await ctx.send(chunk)
 
@@ -612,7 +676,7 @@ async def ask_build(ctx, *, query: str):
         response = await BuildAgent.process(query, project_context=project_context)
         build_channel = bot.get_channel(BUILD_CHANNEL_ID)
         
-        chunks = [response[i:i+1900] for i in range(0, len(response), 1900)]
+        chunks = split_message(response)
         for i, chunk in enumerate(chunks):
             if i == 0:
                 await build_channel.send(f"**Build Agent (Claude)** responding to: *{query[:100]}...*\n\n{chunk}")
@@ -633,7 +697,7 @@ async def ask_gemini(ctx, *, query: str):
         
         response = await GeminiAgent.process(query, project_context=project_context)
         
-        chunks = [response[i:i+1900] for i in range(0, len(response), 1900)]
+        chunks = split_message(response)
         for chunk in chunks:
             await ctx.send(chunk)
 
@@ -682,7 +746,7 @@ async def get_context(ctx, channel_name: str, limit: int = 20):
         await ctx.send("No messages found in this channel.")
         return
     
-    chunks = [response[i:i+1900] for i in range(0, len(response), 1900)]
+    chunks = split_message(response)
     for chunk in chunks:
         await ctx.send(chunk)
 
@@ -703,10 +767,18 @@ async def crosscheck(ctx, *, query: str):
         
         claude_response, gpt_response = await asyncio.gather(claude_task, gpt_task)
         
-        # Post comparison
-        await ctx.send(f"**Cross-check:** *{query[:100]}...*\n\n"
-                      f"**🔵 Claude's take:**\n{claude_response[:800]}\n\n"
-                      f"**🟢 GPT-4's take:**\n{gpt_response[:800]}")
+        # Post comparison - Send headers then full responses
+        await ctx.send(f"**Cross-check:** *{query[:100]}...*")
+        
+        await ctx.send("**🔵 Claude's take:**")
+        chunks = split_message(claude_response)
+        for chunk in chunks:
+            await ctx.send(chunk)
+
+        await ctx.send("**🟢 GPT-4's take:**")
+        chunks = split_message(gpt_response)
+        for chunk in chunks:
+            await ctx.send(chunk)
 
 
 @bot.command(name='consensus')
@@ -730,21 +802,38 @@ async def consensus(ctx, *, query: str):
         
         # Post to findings channel for record
         findings_channel = bot.get_channel(FINDINGS_CHANNEL_ID)
-        await findings_channel.send(
-            f"**🗳️ Consensus Query:** *{query[:100]}...*\n\n"
-            f"**🔵 Claude:**\n{claude_response[:600]}\n\n"
-            f"**🟢 GPT-4:**\n{gpt_response[:600]}\n\n"
-            f"**🟡 Gemini:**\n{gemini_response[:600]}"
-        )
+        # Post to findings channel for record - Full Content
+        findings_channel = bot.get_channel(FINDINGS_CHANNEL_ID)
+        await findings_channel.send(f"**🗳️ Consensus Query:** *{query[:100]}...*")
         
-        # Summary in current channel
-        await ctx.send(
-            f"**🗳️ Consensus Query:** *{query[:100]}...*\n\n"
-            f"**🔵 Claude:**\n{claude_response[:500]}...\n\n"
-            f"**🟢 GPT-4:**\n{gpt_response[:500]}...\n\n"
-            f"**🟡 Gemini:**\n{gemini_response[:500]}...\n\n"
-            f"📌 Full responses logged in <#{FINDINGS_CHANNEL_ID}>"
-        )
+        await findings_channel.send("**🔵 Claude:**")
+        for chunk in split_message(claude_response):
+            await findings_channel.send(chunk)
+            
+        await findings_channel.send("**🟢 GPT-4:**")
+        for chunk in split_message(gpt_response):
+            await findings_channel.send(chunk)
+            
+        await findings_channel.send("**🟡 Gemini:**")
+        for chunk in split_message(gemini_response):
+            await findings_channel.send(chunk)
+        
+        # Summary in current channel - Full Content too
+        await ctx.send(f"**🗳️ Consensus Query:** *{query[:100]}...*")
+        
+        await ctx.send("**🔵 Claude:**")
+        for chunk in split_message(claude_response):
+            await ctx.send(chunk)
+            
+        await ctx.send("**🟢 GPT-4:**")
+        for chunk in split_message(gpt_response):
+            await ctx.send(chunk)
+
+        await ctx.send("**🟡 Gemini:**")
+        for chunk in split_message(gemini_response):
+            await ctx.send(chunk)
+
+        await ctx.send(f"📌 Full responses logged in <#{FINDINGS_CHANNEL_ID}>")
 
 
 @bot.command(name='log_finding')
@@ -754,9 +843,10 @@ async def log_finding(ctx, *, finding: str):
     findings_channel = bot.get_channel(FINDINGS_CHANNEL_ID)
     timestamp = discord.utils.utcnow().strftime('%Y-%m-%d %H:%M UTC')
     
-    await findings_channel.send(f"📌 **Finding logged** ({timestamp})\n"
-                               f"By: {ctx.author.name}\n\n"
-                               f"{finding}")
+    full_msg = f"📌 **Finding logged** ({timestamp})\nBy: {ctx.author.name}\n\n{finding}"
+    chunks = split_message(full_msg)
+    for chunk in chunks:
+        await findings_channel.send(chunk)
     await ctx.send(f"✅ Finding logged to <#{FINDINGS_CHANNEL_ID}>")
 
 
@@ -785,7 +875,9 @@ async def list_channels(ctx):
 • <#{ARCHIVE_CHANNEL_ID}> - Archived content
     """
     
-    await ctx.send(channel_info)
+    chunks = split_message(channel_info)
+    for chunk in chunks:
+        await ctx.send(chunk)
 
 
 @bot.command(name='task')
@@ -796,12 +888,20 @@ async def create_task(ctx, *, description: str):
     timestamp = discord.utils.utcnow().strftime('%Y-%m-%d %H:%M UTC')
     
     # Create task message
-    task_msg = await task_channel.send(
+    full_msg = (
         f"📋 **New Task** ({timestamp})\n"
         f"Created by: {ctx.author.name}\n\n"
         f"{description}\n\n"
         f"Status: 🔵 **ACTIVE**"
     )
+    
+    chunks = split_message(full_msg)
+    task_msg = None
+    
+    for i, chunk in enumerate(chunks):
+        msg = await task_channel.send(chunk)
+        if i == 0:
+            task_msg = msg
     
     await ctx.send(f"✅ Task created in <#{TASK_CHANNEL_ID}>\nTask ID: `{task_msg.id}`")
 
@@ -820,12 +920,16 @@ async def complete_task(ctx, task_id: int, *, result: str = "Completed"):
         original_content = task_msg.content
         
         # Post to completed channel
-        await completed_channel.send(
+        full_log = (
             f"✅ **Task Completed** ({timestamp})\n"
             f"Completed by: {ctx.author.name}\n\n"
             f"**Original Task:**\n{original_content}\n\n"
-            f"**Result:** {result}"
+            f"**Result:**\n{result}"
         )
+        
+        chunks = split_message(full_log)
+        for chunk in chunks:
+            await completed_channel.send(chunk)
         
         # Delete from task channel
         await task_msg.delete()
@@ -878,7 +982,9 @@ async def help_bot(ctx):
 • $$$: Claude (!deep, !research, !hardmode, !build)
     """
     
-    await ctx.send(help_text)
+    chunks = split_message(help_text)
+    for chunk in chunks:
+        await ctx.send(chunk)
 
 
 # Run the bot
