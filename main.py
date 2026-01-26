@@ -218,10 +218,38 @@ class ProjectContext:
             return ""
     
     @staticmethod
-    async def get_full_context(bot) -> str:
-        """Load all context from local prompt files"""
+    async def get_channel_history(channel, limit: int = 10) -> str:
+        """Fetch recent messages from a Discord channel for conversation context"""
+        if not channel:
+            return ""
+        
+        messages = []
+        try:
+            async for msg in channel.history(limit=limit):
+                # Skip empty messages and bot's own status messages
+                if msg.content and not msg.content.startswith(('🧠', '💬', '⚡', '🔀', '🏗️', '📚', '🔄', '📎', '✅', '❌')):
+                    # Truncate long messages to save tokens
+                    content = msg.content[:500] + "..." if len(msg.content) > 500 else msg.content
+                    author = "Bot" if msg.author.bot else msg.author.name
+                    messages.append(f"[{author}]: {content}")
+            
+            # Reverse to get chronological order
+            messages.reverse()
+            
+            if messages:
+                return "## Recent Conversation:\n" + "\n\n".join(messages)
+        except Exception as e:
+            print(f"Could not fetch channel history: {e}")
+        
+        return ""
+
+    
+    @staticmethod
+    async def get_full_context(bot, channel=None) -> str:
+        """Load all context from local prompt files, memories, and optionally include channel history"""
         context_parts = []
         
+        # Load local prompt files
         for filename in ProjectContext.CONTEXT_FILES:
             content = ProjectContext.load_prompt_file(filename)
             if content:
@@ -231,6 +259,12 @@ class ProjectContext:
         memory_context = Memory.get_context()
         if memory_context:
             context_parts.append(memory_context)
+        
+        # Add channel conversation history if provided
+        if channel:
+            channel_history = await ProjectContext.get_channel_history(channel)
+            if channel_history:
+                context_parts.append(channel_history)
         
         if context_parts:
             return "\n\n---\n\n".join(context_parts)
@@ -677,7 +711,7 @@ async def ask_general(ctx, *, query: str = None):
             return
 
         await ctx.send("💬 Asking GPT-4...")
-        project_context = await ProjectContext.get_full_context(bot)
+        project_context = await ProjectContext.get_full_context(bot, ctx.channel)
         
         response = await GeneralAgent.process(query, project_context=project_context)
         
@@ -706,7 +740,7 @@ async def auto_route(ctx, *, query: str = None):
         agent_type, channel_id = await CenterAI.route_query(query)
         
         # Load project context
-        project_context = await ProjectContext.get_full_context(bot)
+        project_context = await ProjectContext.get_full_context(bot, ctx.channel)
         
         if agent_type == "research":
             await ctx.send("🧠 Routed to **Claude** (Research)...")
@@ -747,7 +781,7 @@ async def ask_deep(ctx, *, query: str = None):
             return
 
         await ctx.send("🧠 Deep reasoning with Claude...")
-        project_context = await ProjectContext.get_full_context(bot)
+        project_context = await ProjectContext.get_full_context(bot, ctx.channel)
         
         response = await ResearchAgent.process(query, project_context=project_context, mode='core')
         research_channel = bot.get_channel(RESEARCH_CHANNEL_ID)
@@ -780,7 +814,7 @@ async def ask_hardmode(ctx, *, query: str = None):
             return
 
         await ctx.send("🔥 **HARD MODE** - Loading project context and preparing critique...")
-        project_context = await ProjectContext.get_full_context(bot)
+        project_context = await ProjectContext.get_full_context(bot, ctx.channel)
         
         response = await ResearchAgent.process(query, project_context=project_context, mode='hardmode')
         research_channel = bot.get_channel(RESEARCH_CHANNEL_ID)
@@ -806,7 +840,7 @@ async def ask_code(ctx, *, query: str = None):
             return
 
         await ctx.send("⚡ Quick code with Gemini (free)...")
-        project_context = await ProjectContext.get_full_context(bot)
+        project_context = await ProjectContext.get_full_context(bot, ctx.channel)
         
         response = await SimpleCodeAgent.process(query, project_context=project_context)
         
@@ -826,7 +860,7 @@ async def ask_build(ctx, *, query: str = None):
             return
 
         await ctx.send("🏗️ Building with Claude (checking assumptions)...")
-        project_context = await ProjectContext.get_full_context(bot)
+        project_context = await ProjectContext.get_full_context(bot, ctx.channel)
         
         response = await BuildAgent.process(query, project_context=project_context)
         build_channel = bot.get_channel(BUILD_CHANNEL_ID)
@@ -853,7 +887,7 @@ async def ask_gemini(ctx, *, query: str = None):
             return
 
         await ctx.send("📚 Loading project context...")
-        project_context = await ProjectContext.get_full_context(bot)
+        project_context = await ProjectContext.get_full_context(bot, ctx.channel)
         
         response = await GeminiAgent.process(query, project_context=project_context)
         
@@ -922,7 +956,7 @@ async def crosscheck(ctx, *, query: str = None):
             return
 
         await ctx.send("📚 Loading project context...")
-        project_context = await ProjectContext.get_full_context(bot)
+        project_context = await ProjectContext.get_full_context(bot, ctx.channel)
         
         await ctx.send(f"🔄 Querying Claude and GPT-4...")
         
@@ -957,7 +991,7 @@ async def consensus(ctx, *, query: str = None):
             return
 
         await ctx.send("📚 Loading project context...")
-        project_context = await ProjectContext.get_full_context(bot)
+        project_context = await ProjectContext.get_full_context(bot, ctx.channel)
         
         await ctx.send(f"🔄 Querying Claude, GPT-4, and Gemini...")
         
