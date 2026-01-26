@@ -8,8 +8,9 @@ import json
 import sys
 from typing import Optional
 import asyncio
-from dotenv import load_dotenv
 import aiohttp
+from datetime import datetime
+import json
 
 # Load environment variables from .env file
 load_dotenv()
@@ -103,6 +104,94 @@ if GEMINI_API_KEY:
     gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 
 
+
+class Memory:
+    """Persistent memory storage for important notes/findings"""
+    
+    MEMORY_FILE = os.path.join(os.path.dirname(__file__), 'memory.json')
+    
+    @staticmethod
+    def _load() -> dict:
+        """Load memories from JSON file"""
+        try:
+            with open(Memory.MEMORY_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return {"memories": [], "next_id": 1}
+    
+    @staticmethod
+    def _save(data: dict):
+        """Save memories to JSON file"""
+        with open(Memory.MEMORY_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+    
+    @staticmethod
+    def add(content: str, author: str) -> int:
+        """Add a new memory and return its ID"""
+        data = Memory._load()
+        memory_id = data["next_id"]
+        data["memories"].append({
+            "id": memory_id,
+            "content": content,
+            "author": author,
+            "created": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "updated": None
+        })
+        data["next_id"] = memory_id + 1
+        Memory._save(data)
+        return memory_id
+    
+    @staticmethod
+    def get_all() -> list:
+        """Get all memories"""
+        return Memory._load()["memories"]
+    
+    @staticmethod
+    def get(memory_id: int) -> dict | None:
+        """Get a specific memory by ID"""
+        data = Memory._load()
+        for mem in data["memories"]:
+            if mem["id"] == memory_id:
+                return mem
+        return None
+    
+    @staticmethod
+    def update(memory_id: int, new_content: str) -> bool:
+        """Update a memory's content, returns True if found"""
+        data = Memory._load()
+        for mem in data["memories"]:
+            if mem["id"] == memory_id:
+                mem["content"] = new_content
+                mem["updated"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+                Memory._save(data)
+                return True
+        return False
+    
+    @staticmethod
+    def delete(memory_id: int) -> bool:
+        """Delete a memory, returns True if found"""
+        data = Memory._load()
+        for i, mem in enumerate(data["memories"]):
+            if mem["id"] == memory_id:
+                data["memories"].pop(i)
+                Memory._save(data)
+                return True
+        return False
+    
+    @staticmethod
+    def get_context() -> str:
+        """Get all memories formatted for AI context"""
+        memories = Memory.get_all()
+        if not memories:
+            return ""
+        
+        lines = ["## Important Memories (marked with !imp):"]
+        for mem in memories:
+            lines.append(f"- [{mem['id']}] {mem['content']} (by {mem['author']}, {mem['created']})")
+        
+        return "\n".join(lines)
+
+
 class ProjectContext:
     """Loads context from local prompt files (no Discord channel fetching)"""
     
@@ -137,6 +226,11 @@ class ProjectContext:
             content = ProjectContext.load_prompt_file(filename)
             if content:
                 context_parts.append(content)
+        
+        # Add important memories
+        memory_context = Memory.get_context()
+        if memory_context:
+            context_parts.append(memory_context)
         
         if context_parts:
             return "\n\n---\n\n".join(context_parts)
@@ -402,6 +496,36 @@ Provide working code with brief explanations."""
         
         return response.text
 
+
+async def extract_query_from_attachments(ctx, query: str = None) -> tuple[str, bool]:
+    """
+    Helper function to extract text from .txt attachments.
+    Discord auto-converts large pastes to .txt files.
+    
+    Returns:
+        tuple: (combined_query, had_attachment) - query text and whether an attachment was read
+    """
+    had_attachment = False
+    
+    if ctx.message.attachments:
+        for attachment in ctx.message.attachments:
+            if attachment.filename.endswith('.txt'):
+                try:
+                    content = await attachment.read()
+                    attachment_text = content.decode('utf-8')
+                    # Combine with any existing query text
+                    if query:
+                        query = f"{query}\n\n{attachment_text}"
+                    else:
+                        query = attachment_text
+                    await ctx.send(f"📎 Read {len(attachment_text):,} characters from `{attachment.filename}`")
+                    had_attachment = True
+                except Exception as e:
+                    await ctx.send(f"⚠️ Could not read attachment: {e}")
+    
+    return query, had_attachment
+
+
 @bot.event
 async def on_ready():
     print(f'{bot.user} has connected to Discord!')
@@ -543,10 +667,15 @@ async def on_message(message):
 
 
 @bot.command(name='ask')
-async def ask_general(ctx, *, query: str):
+async def ask_general(ctx, *, query: str = None):
     """Ask GPT-4 for general questions (cheaper). Usage: !ask [question]"""
     
     async with ctx.typing():
+        query, _ = await extract_query_from_attachments(ctx, query)
+        if not query:
+            await ctx.send("❌ **Missing query.** Please provide a question or attach a `.txt` file.\nUsage: `!ask [question]`")
+            return
+
         await ctx.send("💬 Asking GPT-4...")
         project_context = await ProjectContext.get_full_context(bot)
         
@@ -558,7 +687,7 @@ async def ask_general(ctx, *, query: str):
 
 
 @bot.command(name='auto')
-async def auto_route(ctx, *, query: str):
+async def auto_route(ctx, *, query: str = None):
     """Auto-route query to the best AI using Gemini (FREE routing). Usage: !auto [question]"""
     
     if not gemini_client:
@@ -566,6 +695,11 @@ async def auto_route(ctx, *, query: str):
         return
     
     async with ctx.typing():
+        query, _ = await extract_query_from_attachments(ctx, query)
+        if not query:
+            await ctx.send("❌ **Missing query.** Please provide a question or attach a `.txt` file.\nUsage: `!auto [question]`")
+            return
+
         await ctx.send("🔀 Routing query with Gemini (free)...")
         
         # Use CenterAI to determine the best agent
@@ -603,10 +737,15 @@ async def auto_route(ctx, *, query: str):
 
 
 @bot.command(name='deep')
-async def ask_deep(ctx, *, query: str):
+async def ask_deep(ctx, *, query: str = None):
     """Ask Claude for deep reasoning/analysis. Usage: !deep [question]"""
     
     async with ctx.typing():
+        query, _ = await extract_query_from_attachments(ctx, query)
+        if not query:
+            await ctx.send("❌ **Missing query.** Please provide a question or attach a `.txt` file.\nUsage: `!deep [question]`")
+            return
+
         await ctx.send("🧠 Deep reasoning with Claude...")
         project_context = await ProjectContext.get_full_context(bot)
         
@@ -624,16 +763,22 @@ async def ask_deep(ctx, *, query: str):
 
 
 @bot.command(name='research')
-async def ask_research(ctx, *, query: str):
+async def ask_research(ctx, *, query: str = None):
     """Alias for !deep. Ask Claude for deep reasoning. Usage: !research [question]"""
+    # Pass the message context so ask_deep can check for attachments
     await ask_deep(ctx, query=query)
 
 
 @bot.command(name='hardmode')
-async def ask_hardmode(ctx, *, query: str):
+async def ask_hardmode(ctx, *, query: str = None):
     """Stress-test an idea with aggressive skepticism. Usage: !hardmode [idea to scrutinize]"""
     
     async with ctx.typing():
+        query, _ = await extract_query_from_attachments(ctx, query)
+        if not query:
+            await ctx.send("❌ **Missing query.** Please provide an idea or attach a `.txt` file.\nUsage: `!hardmode [idea]`")
+            return
+
         await ctx.send("🔥 **HARD MODE** - Loading project context and preparing critique...")
         project_context = await ProjectContext.get_full_context(bot)
         
@@ -651,10 +796,15 @@ async def ask_hardmode(ctx, *, query: str):
 
 
 @bot.command(name='code')
-async def ask_code(ctx, *, query: str):
+async def ask_code(ctx, *, query: str = None):
     """Ask Gemini for simple code (FREE). Usage: !code [request]"""
     
     async with ctx.typing():
+        query, _ = await extract_query_from_attachments(ctx, query)
+        if not query:
+            await ctx.send("❌ **Missing query.** Please provide a request or attach a `.txt` file.\nUsage: `!code [request]`")
+            return
+
         await ctx.send("⚡ Quick code with Gemini (free)...")
         project_context = await ProjectContext.get_full_context(bot)
         
@@ -666,10 +816,15 @@ async def ask_code(ctx, *, query: str):
 
 
 @bot.command(name='build')
-async def ask_build(ctx, *, query: str):
+async def ask_build(ctx, *, query: str = None):
     """Ask Claude for complex implementation (with assumption gate). Usage: !build [question]"""
     
     async with ctx.typing():
+        query, _ = await extract_query_from_attachments(ctx, query)
+        if not query:
+            await ctx.send("❌ **Missing query.** Please provide a question or attach a `.txt` file.\nUsage: `!build [question]`")
+            return
+
         await ctx.send("🏗️ Building with Claude (checking assumptions)...")
         project_context = await ProjectContext.get_full_context(bot)
         
@@ -687,11 +842,16 @@ async def ask_build(ctx, *, query: str):
 
 
 @bot.command(name='gemini')
-async def ask_gemini(ctx, *, query: str):
+async def ask_gemini(ctx, *, query: str = None):
     """Ask Gemini directly with project context. Usage: !gemini [question]"""
 
     
     async with ctx.typing():
+        query, _ = await extract_query_from_attachments(ctx, query)
+        if not query:
+            await ctx.send("❌ **Missing query.** Please provide a question or attach a `.txt` file.\nUsage: `!gemini [question]`")
+            return
+
         await ctx.send("📚 Loading project context...")
         project_context = await ProjectContext.get_full_context(bot)
         
@@ -752,10 +912,15 @@ async def get_context(ctx, channel_name: str, limit: int = 20):
 
 
 @bot.command(name='crosscheck')
-async def crosscheck(ctx, *, query: str):
+async def crosscheck(ctx, *, query: str = None):
     """Get responses from Claude AND GPT-4 with project context. Usage: !crosscheck [question]"""
     
     async with ctx.typing():
+        query, _ = await extract_query_from_attachments(ctx, query)
+        if not query:
+            await ctx.send("❌ **Missing query.** Please provide a question or attach a `.txt` file.\nUsage: `!crosscheck [question]`")
+            return
+
         await ctx.send("📚 Loading project context...")
         project_context = await ProjectContext.get_full_context(bot)
         
@@ -782,10 +947,15 @@ async def crosscheck(ctx, *, query: str):
 
 
 @bot.command(name='consensus')
-async def consensus(ctx, *, query: str):
+async def consensus(ctx, *, query: str = None):
     """Get responses from ALL THREE AIs with project context. Usage: !consensus [question]"""
     
     async with ctx.typing():
+        query, _ = await extract_query_from_attachments(ctx, query)
+        if not query:
+            await ctx.send("❌ **Missing query.** Please provide a question or attach a `.txt` file.\nUsage: `!consensus [question]`")
+            return
+
         await ctx.send("📚 Loading project context...")
         project_context = await ProjectContext.get_full_context(bot)
         
@@ -837,8 +1007,13 @@ async def consensus(ctx, *, query: str):
 
 
 @bot.command(name='log_finding')
-async def log_finding(ctx, *, finding: str):
+async def log_finding(ctx, *, finding: str = None):
     """Log a key finding to #findings channel. Usage: !log_finding [your finding]"""
+    
+    finding, _ = await extract_query_from_attachments(ctx, finding)
+    if not finding:
+        await ctx.send("❌ **Missing finding.** Please provide text or attach a `.txt` file.\nUsage: `!log_finding [your finding]`")
+        return
     
     findings_channel = bot.get_channel(FINDINGS_CHANNEL_ID)
     timestamp = discord.utils.utcnow().strftime('%Y-%m-%d %H:%M UTC')
@@ -985,6 +1160,77 @@ async def help_bot(ctx):
     chunks = split_message(help_text)
     for chunk in chunks:
         await ctx.send(chunk)
+
+
+@bot.command(name='imp')
+async def add_memory(ctx, *, content: str = None):
+    """Save something important to memory. Usage: !imp [text] or attach a .txt file"""
+    
+    content, _ = await extract_query_from_attachments(ctx, content)
+    if not content:
+        await ctx.send("❌ **Missing content.** Please provide text or attach a `.txt` file.\nUsage: `!imp [important note]`")
+        return
+    
+    memory_id = Memory.add(content, ctx.author.name)
+    await ctx.send(f"🧠 **Saved to memory!** (ID: `{memory_id}`)\n> {content[:200]}{'...' if len(content) > 200 else ''}")
+
+
+@bot.command(name='memory')
+async def list_memories(ctx):
+    """List all saved memories. Usage: !memory"""
+    
+    memories = Memory.get_all()
+    
+    if not memories:
+        await ctx.send("📭 **No memories saved yet.**\nUse `!imp [text]` to save something important.")
+        return
+    
+    lines = ["🧠 **Saved Memories:**\n"]
+    for mem in memories:
+        updated = f" *(updated {mem['updated']})*" if mem['updated'] else ""
+        lines.append(f"`[{mem['id']}]` {mem['content'][:100]}{'...' if len(mem['content']) > 100 else ''}\n    *— {mem['author']}, {mem['created']}{updated}*\n")
+    
+    response = "\n".join(lines)
+    
+    # Chunk if needed
+    chunks = split_message(response)
+    for chunk in chunks:
+        await ctx.send(chunk)
+
+
+@bot.command(name='update')
+async def update_memory(ctx, memory_id: int = None, *, new_content: str = None):
+    """Update a memory's content. Usage: !update [id] [new text]"""
+    
+    if memory_id is None:
+        await ctx.send("❌ **Missing ID.** Usage: `!update [id] [new text]`")
+        return
+    
+    new_content, _ = await extract_query_from_attachments(ctx, new_content)
+    if not new_content:
+        await ctx.send("❌ **Missing new content.** Usage: `!update [id] [new text]`")
+        return
+    
+    if Memory.update(memory_id, new_content):
+        await ctx.send(f"✅ **Memory `{memory_id}` updated!**\n> {new_content[:200]}{'...' if len(new_content) > 200 else ''}")
+    else:
+        await ctx.send(f"❌ Memory with ID `{memory_id}` not found.")
+
+
+@bot.command(name='forget')
+async def delete_memory(ctx, memory_id: int = None):
+    """Delete a memory. Usage: !forget [id]"""
+    
+    if memory_id is None:
+        await ctx.send("❌ **Missing ID.** Usage: `!forget [id]`")
+        return
+    
+    mem = Memory.get(memory_id)
+    if mem:
+        Memory.delete(memory_id)
+        await ctx.send(f"🗑️ **Memory `{memory_id}` deleted:**\n> ~~{mem['content'][:100]}...~~")
+    else:
+        await ctx.send(f"❌ Memory with ID `{memory_id}` not found.")
 
 
 # Run the bot
